@@ -44,7 +44,7 @@
   #topbar{
     position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:10px;
     padding:calc(10px + env(safe-area-inset-top,0px)) 14px 10px;
-    background:rgba(15,23,42,0.92); backdrop-filter:blur(10px); border-bottom:1px solid var(--border);
+    background:color-mix(in srgb, var(--bar-bg, var(--bg)) 92%, transparent); backdrop-filter:blur(10px); border-bottom:1px solid var(--border);
   }
   #brandMark{ flex:none; display:flex; align-items:center; gap:6px; }
   #brandMark svg{ width:24px; height:24px; }
@@ -232,7 +232,7 @@
   <div id="brandMark">
     <svg viewBox="0 0 24 24">
       <circle cx="15.5" cy="8" r="3.2" fill="#ffd76a"/>
-      <path d="M8 15a4 4 0 0 1 .6-7.4A5 5 0 0 1 18 9a3.6 3.6 0 0 1-.4 7H8Z" fill="#eef2f8"/>
+      <path d="M8 15a4 4 0 0 1 .6-7.4A5 5 0 0 1 18 9a3.6 3.6 0 0 1-.4 7H8Z" fill="currentColor"/>
     </svg>
     <span>Wethr</span>
   </div>
@@ -526,6 +526,39 @@ function relativeLuminance(hex) {
   const [r,g,b] = hexToRgb(hex).map(v => v/255);
   return 0.2126*r + 0.7152*g + 0.0722*b;
 }
+// WCAG 2 contrast ratio (uses gamma-corrected luminance, unlike the rough
+// relativeLuminance() above).
+function contrastRatio(hexA, hexB) {
+  const lum = hex => {
+    const [r,g,b] = hexToRgb(hex).map(v => { v /= 255; return v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); });
+    return 0.2126*r + 0.7152*g + 0.0722*b;
+  };
+  const a = lum(hexA), b = lum(hexB);
+  return (Math.max(a,b) + 0.05) / (Math.min(a,b) + 0.05);
+}
+// Returns `preferred` if it reaches normal-text contrast (4.5:1) on `bg`,
+// otherwise the closest blend of it towards each fallback in turn that does,
+// otherwise whichever fallback contrasts best.
+function readableOn(bg, preferred, fallbacks) {
+  if (contrastRatio(preferred, bg) >= 4.5) return preferred;
+  for (const fb of fallbacks) {
+    for (let w = 0.1; w <= 1.0001; w += 0.1) {
+      const c = mixHex(preferred, fb, w);
+      if (contrastRatio(c, bg) >= 4.5) return c;
+    }
+  }
+  return fallbacks.reduce((best, c) => contrastRatio(c, bg) > contrastRatio(best, bg) ? c : best);
+}
+// On Android (Capacitor) the top bar sits under the status bar, so the
+// status icons must flip between light and dark to stay visible on it.
+// barBg null means "follow the device theme", like the stylesheet does.
+function syncSystemBars(barBg) {
+  const plugins = window.Capacitor && window.Capacitor.Plugins;
+  if (!plugins || !plugins.SystemBars) return;
+  let style = "DEFAULT";
+  if (barBg) style = contrastRatio(barBg, "#000000") > contrastRatio(barBg, "#ffffff") ? "LIGHT" : "DARK";
+  plugins.SystemBars.setStyle({ style: style }).catch(function () {});
+}
 
 const WEATHER_PALETTES = {
   dayClear:   { bg: "#4a9fe8", text: "#ffffff" },
@@ -565,8 +598,10 @@ function applyWeatherTheme(tempC, isDay, code) {
   if (!settings.useWeatherBg) {
     // Clear any inline overrides so the normal light/dark stylesheet theme
     // (driven by prefers-color-scheme) takes back over.
-    ["--bg","--surface","--surface-2","--border","--text","--dim","--accent","--accent-text"]
+    ["--bg","--surface","--surface-2","--border","--text","--dim","--accent","--accent-text",
+     "--banner-warn-text","--banner-danger-text","--bar-bg"]
       .forEach(v => root.removeProperty(v));
+    syncSystemBars(null);
     return;
   }
 
@@ -586,6 +621,27 @@ function applyWeatherTheme(tempC, isDay, code) {
   root.setProperty("--dim", dim);
   root.setProperty("--accent", palette.text);
   root.setProperty("--accent-text", accentText);
+
+  // Banner text: keep the amber/red tint of the stylesheet's banner colours,
+  // but checked against the banner's actual background on this palette
+  // (its translucent tint composited over --bg -- see .banner in the CSS).
+  const textIsLight = relativeLuminance(palette.text) > 0.5;
+  const readableFallbacks = [palette.text, "#12192a", "#ffffff"];
+  root.setProperty("--banner-warn-text", readableOn(mixHex(palette.bg, "#f5a524", 0.12),
+    textIsLight ? "#ffd9a0" : "#7a4a0a", readableFallbacks));
+  root.setProperty("--banner-danger-text", readableOn(mixHex(palette.bg, "#ff6b6b", 0.12),
+    textIsLight ? "#ffb3b3" : "#8a2323", readableFallbacks));
+
+  // Top bar: the palette colour, deepened (or lightened, for dark text) only
+  // as far as needed for its text to stay readable. Aims a little above 4.5:1
+  // because the bar is slightly translucent over scrolling content.
+  let barBg = palette.bg;
+  for (let i = 0; i < 30 && contrastRatio(palette.text, barBg) < 5; i++) {
+    barBg = adjustLightness(barBg, textIsLight ? -2 : 2);
+  }
+  root.setProperty("--bar-bg", barBg);
+
+  syncSystemBars(barBg);
 }
 
 /* ============================================================ ASTRONOMY: MOON PHASE, RISE, SET ============================================================
