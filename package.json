@@ -10,7 +10,8 @@
     "start": "electron .",
     "icon": "electron electron/make-icon.js",
     "dist": "electron-builder",
-    "dist:dir": "electron-builder --dir"
+    "dist:dir": "electron-builder --dir",
+    "android:sync": "node -e \"require('fs').mkdirSync('www',{recursive:true});require('fs').copyFileSync('weather-app.html','www/index.html')\" && cap sync android"
   },
   "build": {
     "appId": "com.andrewrigney.wethr",
@@ -46,11 +47,16 @@
     }
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.2",
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3"
   },
   "allowScripts": {
     "electron@44.4.5": true,
     "electron-winstaller@5.4.0": true
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/core": "^8.5.2"
   }
 }

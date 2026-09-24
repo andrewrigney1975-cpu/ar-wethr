@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Wethr</string>
+    <string name="title_activity_main">Wethr</string>
+    <string name="package_name">com.andrewrigney.wethr</string>
+    <string name="custom_url_scheme">com.andrewrigney.wethr</string>
+</resources>

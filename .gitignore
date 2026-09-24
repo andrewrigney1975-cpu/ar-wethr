@@ -2,3 +2,4 @@ certs/
 mkcert-tool/
 node_modules/
 dist/
+www/
