@@ -21,7 +21,7 @@
     --text:#eef2f8; --dim:#93a3bb; --accent:#5aa9ff; --accent-text:#04142b;
     --warn:#f5a524; --danger:#ff6b6b; --good:#3ddc97;
     --banner-warn-text:#ffd9a0; --banner-danger-text:#ffb3b3; --rain-text:#7fc8ff;
-    padding-top: env(safe-area-inset-top, 0px);
+    /* No top inset here: #topbar pads itself by safe-area-inset-top. */
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   @media (prefers-color-scheme: light){
