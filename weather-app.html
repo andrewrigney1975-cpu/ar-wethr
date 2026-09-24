@@ -670,13 +670,30 @@ function gmst(jd) {
   const theta = 280.46061837 + 360.98564736629 * (jd - 2451545.0) + 0.000387933*T*T - T*T*T/38710000;
   return ((theta % 360) + 360) % 360;
 }
-function moonAltitude(date, lat, lon) {
-  const jd = julianDay(date);
-  const rd = moonRaDec(jd);
+// Geometric altitude (degrees) of a body at RA/Dec (degrees) for an observer.
+function altitudeFromRaDec(jd, rd, lat, lon) {
   const lst = ((gmst(jd) + lon) % 360 + 360) % 360;
   let ha = lst - rd.ra; if (ha > 180) ha -= 360; if (ha < -180) ha += 360;
   const haR = ha * D2R, latR = lat * D2R, decR = rd.dec * D2R;
   return Math.asin(Math.sin(latR)*Math.sin(decR) + Math.cos(latR)*Math.cos(decR)*Math.cos(haR)) / D2R;
+}
+function moonAltitude(date, lat, lon) {
+  const jd = julianDay(date);
+  return altitudeFromRaDec(jd, moonRaDec(jd), lat, lon);
+}
+// Low-precision solar position (Astronomical Almanac / NOAA simplified
+// series, ~0.01 deg) -- far finer than a pixel on the sky arc.
+function sunRaDec(jd) {
+  const n = jd - 2451545.0;
+  const L = 280.460 + 0.9856474 * n, g = (357.528 + 0.9856003 * n) * D2R;
+  const lam = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * D2R;
+  const eps = (23.439 - 0.0000004 * n) * D2R;
+  const ra = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam));
+  return { ra: (ra / D2R + 360) % 360, dec: Math.asin(Math.sin(eps) * Math.sin(lam)) / D2R };
+}
+function sunAltitude(date, lat, lon) {
+  const jd = julianDay(date);
+  return altitudeFromRaDec(jd, sunRaDec(jd), lat, lon);
 }
 // All horizon crossings of the moon in [startMs, endMs], in time order.
 function moonCrossings(startMs, endMs, lat, lon) {
@@ -992,7 +1009,7 @@ function renderNowAndForecast(data, usedFallback) {
   els.moonriseVal.textContent = moonEvents.rise ? fmtTime(moonEvents.rise, tz) : "None today";
   els.moonsetVal.textContent = moonEvents.set ? fmtTime(moonEvents.set, tz) : "None today";
   const moonPass = moonPassAround(now, data.latitude, data.longitude);
-  renderSkyArc(sunriseDate, sunsetDate, now, moonPass.rise, moonPass.set);
+  renderSkyArc(sunriseDate, sunsetDate, now, moonPass.rise, moonPass.set, data.latitude, data.longitude);
 
   let pastHtml = "";
   for (let i = 6; i >= 0; i--) {
@@ -1006,70 +1023,72 @@ function renderNowAndForecast(data, usedFallback) {
   return { tz: tz, todayStr: todayStr };
 }
 
-// Draws one shared arc (rise in the east on the right, set in the west on
-// the left, as seen facing the equator from the southern hemisphere) and
-// places a sun marker and a moon marker on it independently -- each one's
-// position along the curve reflects how far *that body* is through its own
-// rise-to-set span, so the two markers are directly comparable even
-// though their actual rise/set clock times differ. All times are real
+// Draws the sun's and the moon's actual paths across the sky (rise in the
+// east on the right, set in the west on the left, as seen facing the equator
+// from the southern hemisphere). Horizontally each body is placed by how far
+// it is through its own rise->set span, so both curves share the same
+// horizon endpoints; vertically the height is the body's real altitude on a
+// fixed 0-90 deg scale, so the sun's arc is visibly lower in winter than
+// summer and the moon rides its own higher/lower path. All times are real
 // instants (Date objects), not shifted wall-clock values.
-function renderSkyArc(sunriseDate, sunsetDate, now, moonRise, moonSet) {
-  const W = 300, H = 92, groundY = 62;
+function renderSkyArc(sunriseDate, sunsetDate, now, moonRise, moonSet, lat, lon) {
+  const W = 300, H = 92, groundY = 62, zenithY = 6;
   const x0 = W - 34, x1 = 34; // t=0 (rise, east) on the right, t=1 (set, west) on the left
-  const apexY = 6, apexX = (x0 + x1) / 2;
-  const TAIL_T = 0.15; // how far past t=0/t=1 the dashed tails extend, in the same curve units
-  const VISIBLE_MARGIN_MS = 2 * 60 * 60 * 1000; // icon shows/hides this far either side of rise/set
+  const TAIL_T = 0.15;   // how far past rise/set the below-horizon tails (and marker visibility) extend, as a fraction of the span
+  const MIN_ALT = -30;   // clamp for the below-horizon tails
+  const SAMPLES = 60;    // points per rise->set span
+  // Altitudes are offset by each body's rise/set threshold (refraction +
+  // semi-diameter) so the curve meets the horizon exactly at rise and set.
+  const SUN_H0 = -0.833, MOON_H0 = -0.583;
 
-  // The main arc is a quadratic bezier from (x0,groundY) to (x1,groundY)
-  // via apex (apexX,apexY). Its point formula is just a polynomial in t,
-  // so evaluating it for t < 0 or t > 1 gives points that continue along
-  // the exact same parabola -- that's how the pre-rise/post-set tails are
-  // drawn as smooth extensions instead of straight vertical drops.
-  function arcPoint(t) {
-    const mt = 1 - t;
+  function makeBody(rise, set, altFn, h0) {
+    if (!rise || !set || set <= rise) return null;
+    const span = set - rise;
     return {
-      x: mt * mt * x0 + 2 * mt * t * apexX + t * t * x1,
-      y: mt * mt * groundY + 2 * mt * t * apexY + t * t * groundY
+      point: function (t) {
+        const alt = Math.max(MIN_ALT, altFn(new Date(rise.getTime() + t * span), lat, lon) - h0);
+        return { x: x0 + (x1 - x0) * t, y: groundY - (alt / 90) * (groundY - zenithY) };
+      },
+      t: (now - rise) / span
     };
   }
-  // Control point for the SAME parabola restricted to [ta,tb], via the
-  // standard quadratic-bezier blossom -- lets a sub/extended range be
-  // drawn as its own exact "M..Q.." path.
-  function blossomControl(ta, tb) {
-    const a = (1 - ta) * (1 - tb), b = ta * (1 - tb) + tb * (1 - ta), c = ta * tb;
-    return { x: a * x0 + b * apexX + c * x1, y: a * groundY + b * apexY + c * groundY };
-  }
-  function tailPath(ta, tb) {
-    const p0 = arcPoint(ta), p1 = blossomControl(ta, tb), p2 = arcPoint(tb);
-    return 'M' + p0.x + ',' + p0.y + ' Q' + p1.x + ',' + p1.y + ' ' + p2.x + ',' + p2.y;
-  }
-
-  // Position a body on the shared curve from its own rise/set: on the arc
-  // while up (t = progress from rise to set), continuing along the same
-  // curve past t=0/t=1 while within VISIBLE_MARGIN_MS of rise/set, and
-  // hidden entirely beyond that -- not astronomically accurate, but a
-  // reasonable approximation of "still roughly daylight/moonlit".
-  function bodyPosition(rise, set) {
-    if (!rise || !set) return { visible: false };
-    const span = set - rise;
-    if (span <= 0) return { visible: false };
-    const rawT = (now - rise) / span;
-    const up = rawT >= 0 && rawT <= 1;
-    if (now < rise - VISIBLE_MARGIN_MS || now > set + VISIBLE_MARGIN_MS) return { visible: false };
-    let t = rawT;
-    if (rawT < 0) {
-      t = -((rise - now) / VISIBLE_MARGIN_MS) * TAIL_T;
-    } else if (rawT > 1) {
-      t = 1 + ((now - set) / VISIBLE_MARGIN_MS) * TAIL_T;
+  function curvePath(body, ta, tb) {
+    const n = Math.max(2, Math.round(SAMPLES * (tb - ta)));
+    let d = "";
+    for (let i = 0; i <= n; i++) {
+      const p = body.point(ta + (tb - ta) * i / n);
+      d += (i ? " L" : "M") + p.x.toFixed(1) + "," + p.y.toFixed(1);
     }
-    return { visible: true, up: up, pt: arcPoint(t) };
+    return d;
+  }
+  // Marker sits on the body's own curve while it's up or within TAIL_T of
+  // rise/set; hidden beyond that.
+  function bodyPosition(body) {
+    if (!body || body.t < -TAIL_T || body.t > 1 + TAIL_T) return { visible: false };
+    return { visible: true, up: body.t >= 0 && body.t <= 1, pt: body.point(body.t) };
   }
 
   const dayMs = sunsetDate - sunriseDate;
-  const sun = bodyPosition(sunriseDate, sunsetDate);
-
+  const sunBody = makeBody(sunriseDate, sunsetDate, sunAltitude, SUN_H0);
   // moonRise/moonSet are the actual pass around `now` (moonPassAround).
-  const moon = bodyPosition(moonRise, moonSet);
+  const moonBody = makeBody(moonRise, moonSet, moonAltitude, MOON_H0);
+  const sun = bodyPosition(sunBody), moon = bodyPosition(moonBody);
+
+  const tailStyle = '" stroke="var(--dim)" stroke-width="2" stroke-dasharray="3 4" fill="none" opacity="0.6"/>';
+  const moonStyle = '" stroke="#c9d6e8" stroke-width="2" stroke-dasharray="5 4" fill="none" stroke-linecap="round"';
+  let curves = "";
+  if (moonBody) {
+    curves +=
+      '<path d="' + curvePath(moonBody, -TAIL_T, 0) + moonStyle + ' opacity="0.25"/>' +
+      '<path d="' + curvePath(moonBody, 1, 1 + TAIL_T) + moonStyle + ' opacity="0.25"/>' +
+      '<path d="' + curvePath(moonBody, 0, 1) + moonStyle + ' opacity="0.7"/>';
+  }
+  if (sunBody) {
+    curves +=
+      '<path d="' + curvePath(sunBody, -TAIL_T, 0) + tailStyle +
+      '<path d="' + curvePath(sunBody, 1, 1 + TAIL_T) + tailStyle +
+      '<path d="' + curvePath(sunBody, 0, 1) + '" stroke="url(#sunArcGrad)" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>';
+  }
 
   let svg =
     '<defs><linearGradient id="sunArcGrad" x1="0" y1="0" x2="1" y2="0">' +
@@ -1078,9 +1097,7 @@ function renderSkyArc(sunriseDate, sunsetDate, now, moonRise, moonSet) {
     '<radialGradient id="sunGlow"><stop offset="0%" stop-color="#ffe17d" stop-opacity="0.8"/><stop offset="60%" stop-color="#ffcc33" stop-opacity="0.35"/><stop offset="100%" stop-color="#ffcc33" stop-opacity="0"/></radialGradient>' +
     '</defs>' +
     '<line x1="' + x0 + '" y1="' + groundY + '" x2="' + x1 + '" y2="' + groundY + '" stroke="var(--border)" stroke-width="1.5"/>' +
-    '<path d="' + tailPath(-TAIL_T, 0) + '" stroke="var(--dim)" stroke-width="2" stroke-dasharray="3 4" fill="none" opacity="0.6"/>' +
-    '<path d="' + tailPath(1, 1 + TAIL_T) + '" stroke="var(--dim)" stroke-width="2" stroke-dasharray="3 4" fill="none" opacity="0.6"/>' +
-    '<path d="M' + x0 + ',' + groundY + ' Q' + apexX + ',' + apexY + ' ' + x1 + ',' + groundY + '" stroke="url(#sunArcGrad)" stroke-width="3" fill="none" stroke-linecap="round"/>' +
+    curves +
     '<circle cx="' + x0 + '" cy="' + groundY + '" r="4" fill="var(--surface)" stroke="var(--dim)" stroke-width="1.5"/>' +
     '<circle cx="' + x1 + '" cy="' + groundY + '" r="4" fill="var(--surface)" stroke="var(--dim)" stroke-width="1.5"/>';
 
