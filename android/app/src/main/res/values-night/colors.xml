@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches the page background in weather-app.html (dark theme). -->
+    <color name="wethr_background">#0F172A</color>
+</resources>
