@@ -1,7 +1,7 @@
 {
   "name": "wethr",
   "productName": "Wethr",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Wethr weather app",
   "author": "Andrew Rigney",
   "private": true,
