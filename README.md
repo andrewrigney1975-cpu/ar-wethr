@@ -4,6 +4,10 @@ A fast, key-free weather app built as a single HTML page, packaged for the web (
 
 Forecasts come from [Open-Meteo](https://open-meteo.com/), preferring the Bureau of Meteorology's ACCESS-G model and falling back automatically to Open-Meteo's blended forecast when BOM's feed is unavailable.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="Wethr showing the forecast for Wagga Wagga, New South Wales" width="360">
+</p>
+
 ## Features
 
 - **Now** — temperature, feels-like, today's high/low, wind, chance and amount of rain, humidity, surface pressure and visibility.
