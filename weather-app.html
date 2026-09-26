@@ -21,6 +21,10 @@
     --text:#eef2f8; --dim:#93a3bb; --accent:#5aa9ff; --accent-text:#04142b;
     --warn:#f5a524; --danger:#ff6b6b; --good:#3ddc97;
     --banner-warn-text:#ffd9a0; --banner-danger-text:#ffb3b3; --rain-text:#7fc8ff;
+    /* Rain chart: bars run aqua -> sky blue with amount, the line runs
+       periwinkle -> violet -> magenta with chance. */
+    --rain-lo:#5eead4; --rain-hi:#0ea5e9;
+    --chance-lo:#7c86b8; --chance-mid:#a78bfa; --chance-hi:#e879f9;
     /* No top inset here: #topbar pads itself by safe-area-inset-top. */
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
@@ -30,6 +34,8 @@
       --text:#12192a; --dim:#5b6a80; --accent:#2f6fe0; --accent-text:#ffffff;
       --warn:#b3660a; --danger:#c93a3a; --good:#1f9d6f;
       --banner-warn-text:#7a4a0a; --banner-danger-text:#8a2323; --rain-text:#1f6fd6;
+      --rain-lo:#2dd4bf; --rain-hi:#0284c7;
+      --chance-lo:#9aa3c7; --chance-mid:#7c3aed; --chance-hi:#c026d3;
     }
   }
   *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -106,6 +112,20 @@
   .dayCard .hi{ font-weight:700; font-size:14px; }
   .dayCard .lo{ color:var(--dim); font-size:12.5px; }
   .dayCard .rain{ font-size:11px; color:var(--rain-text); margin-top:4px; }
+  /* Rain-by-hour chart: an SVG twice the scroller's width (24 hours), with
+     two snap points so each swipe lands on a clean 12-hour frame. */
+  #rainChartReadout{ font-weight:600; color:var(--text); }
+  .rainChartScroll{ overflow-x:auto; scroll-snap-type:x mandatory; scrollbar-width:thin; -webkit-overflow-scrolling:touch; }
+  .rainChartInner{ display:grid; grid-template-columns:1fr 1fr; width:200%; }
+  #rainChartSvg{ grid-area:1 / 1 / 2 / 3; display:block; width:100%; height:150px; overflow:visible; cursor:pointer; touch-action:pan-x pan-y; }
+  .rainChartInner .snap{ grid-row:1; scroll-snap-align:start; pointer-events:none; }
+  .rainChartInner .snap:nth-of-type(1){ grid-column:1; }
+  .rainChartInner .snap:nth-of-type(2){ grid-column:2; }
+  .rainChartLegend{ display:flex; flex-wrap:wrap; align-items:center; gap:6px 16px; margin-top:8px; font-size:12px; color:var(--dim); }
+  .rainChartLegend .key{ display:inline-flex; align-items:center; gap:6px; }
+  .rainChartLegend .lgLine{ width:18px; height:3px; border-radius:2px; background:linear-gradient(90deg, var(--chance-lo), var(--chance-mid), var(--chance-hi)); }
+  .rainChartLegend .lgBar{ width:9px; height:13px; border-radius:3px 3px 0 0; background:linear-gradient(0deg, var(--rain-lo), var(--rain-hi)); }
+  .rainChartLegend .scale{ margin-left:auto; }
 
   .mapToggle{ display:flex; background:var(--surface-2); border:1px solid var(--border); border-radius:9px; padding:2px; }
   .mapToggle button{ background:none; border:0; color:var(--dim); font:inherit; font-size:12px; font-weight:600; padding:4px 12px; border-radius:7px; cursor:pointer; }
@@ -267,8 +287,10 @@
       <div class="nowGrid">
         <div class="stat"><div class="label">Today's high / low</div><div class="value" id="statHiLo">--° / --°</div></div>
         <div class="stat"><div class="label">Wind</div><div class="value" id="statWind">-- km/h</div></div>
-        <div class="stat"><div class="label">Chance of rain</div><div class="value" id="statRainChance">--%</div></div>
-        <div class="stat"><div class="label">Rain expected</div><div class="value" id="statRainAmt">-- mm</div></div>
+        <div class="stat"><div class="label">Chance of rain</div><div class="value" id="statRain">--%</div></div>
+        <div class="stat"><div class="label">Humidity</div><div class="value" id="statHumidity">--%</div></div>
+        <div class="stat"><div class="label">Surface pressure</div><div class="value" id="statPressure">-- hPa</div></div>
+        <div class="stat"><div class="label">Visibility</div><div class="value" id="statVisibility">-- km</div></div>
       </div>
     </div>
   </section>
@@ -282,6 +304,20 @@
         </div>
       </div>
       <div class="mapFrame"><iframe id="windyFrame" title="Windy weather map" loading="lazy" allowfullscreen></iframe></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <div class="cardHead"><h2>Rain by hour</h2><span class="muted" id="rainChartReadout"></span></div>
+      <div class="rainChartScroll" id="rainChartScroll">
+        <div class="rainChartInner"><svg id="rainChartSvg" role="img" aria-label="Chance and amount of rain for the next 24 hours"></svg><span class="snap"></span><span class="snap"></span></div>
+      </div>
+      <div class="rainChartLegend">
+        <span class="key"><i class="lgLine"></i>Chance of rain</span>
+        <span class="key"><i class="lgBar"></i>Rain amount</span>
+        <span class="scale" id="rainChartScale"></span>
+      </div>
     </div>
   </section>
 
@@ -413,7 +449,10 @@ const DAILY_FIELDS = [
   "precipitation_hours","wind_speed_10m_max","wind_gusts_10m_max","wind_direction_10m_dominant",
   "sunrise","sunset"
 ].join(",");
-const HOURLY_FIELDS = ["temperature_2m","apparent_temperature","precipitation_probability","weather_code","wind_speed_10m","wind_direction_10m"].join(",");
+const HOURLY_FIELDS = [
+  "temperature_2m","apparent_temperature","precipitation_probability","weather_code","wind_speed_10m","wind_direction_10m",
+  "relative_humidity_2m","surface_pressure","visibility","precipitation"
+].join(",");
 
 let activeLocation = null;
 let savedLocations = [];
@@ -423,8 +462,8 @@ let lastForecastData = null;
 const els = {};
 ["locBtn","locName","locSub","refreshBtn","settingsBtn",
  "fallbackBanner","errorBanner","notesSection","notesList",
- "nowDate","modelLabel","nowTempVal","feelsLikeVal","nowDesc","statHiLo","statWind","statRainChance","statRainAmt",
- "dayScroll","sunriseVal","sunsetVal","moonIconSvg","moonPhaseVal","moonIllumVal","moonriseVal","moonsetVal",
+ "nowDate","modelLabel","nowTempVal","feelsLikeVal","nowDesc","statHiLo","statWind","statRain","statHumidity","statPressure","statVisibility",
+ "dayScroll","rainChartReadout","rainChartScroll","rainChartSvg","rainChartScale","sunriseVal","sunsetVal","moonIconSvg","moonPhaseVal","moonIllumVal","moonriseVal","moonsetVal",
  "sunArcSvg","sunArcLabel","mapToggle","windyFrame",
  "tideHead","tideBody","pastWeekBody","lastUpdated",
  "monthHead","monthTotal","monthAvgLabel","monthBarFill","monthAvgMark","monthFootnote",
@@ -599,7 +638,8 @@ function applyWeatherTheme(tempC, isDay, code) {
     // Clear any inline overrides so the normal light/dark stylesheet theme
     // (driven by prefers-color-scheme) takes back over.
     ["--bg","--surface","--surface-2","--border","--text","--dim","--accent","--accent-text",
-     "--banner-warn-text","--banner-danger-text","--bar-bg"]
+     "--banner-warn-text","--banner-danger-text","--bar-bg",
+     "--rain-lo","--rain-hi","--chance-lo","--chance-mid","--chance-hi"]
       .forEach(v => root.removeProperty(v));
     syncSystemBars(null);
     return;
@@ -621,6 +661,13 @@ function applyWeatherTheme(tempC, isDay, code) {
   root.setProperty("--dim", dim);
   root.setProperty("--accent", palette.text);
   root.setProperty("--accent-text", accentText);
+
+  // Rain chart colours: the stylesheet's dark- or light-theme set, whichever
+  // suits this palette's background.
+  const chartColours = bgIsDark
+    ? { "--rain-lo":"#5eead4", "--rain-hi":"#0ea5e9", "--chance-lo":"#7c86b8", "--chance-mid":"#a78bfa", "--chance-hi":"#e879f9" }
+    : { "--rain-lo":"#2dd4bf", "--rain-hi":"#0284c7", "--chance-lo":"#9aa3c7", "--chance-mid":"#7c3aed", "--chance-hi":"#c026d3" };
+  Object.keys(chartColours).forEach(k => root.setProperty(k, chartColours[k]));
 
   // Banner text: keep the amber/red tint of the stylesheet's banner colours,
   // but checked against the banner's actual background on this palette
@@ -1024,8 +1071,23 @@ function renderNowAndForecast(data, usedFallback) {
   for (let i = 0; i < hourly.time.length; i++) { if (hourly.time[i].slice(0,10) === todayStr) todayHourIdxs.push(i); }
   const rainProbs = todayHourIdxs.map(function (i) { return hourly.precipitation_probability[i]; }).filter(function (v) { return v !== null && v !== undefined; });
   const maxRainProb = rainProbs.length ? Math.max.apply(null, rainProbs) : null;
-  els.statRainChance.textContent = maxRainProb !== null ? Math.round(maxRainProb) + "%" : "—";
-  els.statRainAmt.innerHTML = (daily.precipitation_sum[idxToday] || 0).toFixed(1) + " <small>mm</small>";
+  const rainAmt = (daily.precipitation_sum[idxToday] || 0).toFixed(1);
+  els.statRain.innerHTML = (maxRainProb !== null ? Math.round(maxRainProb) + "%" : "—") +
+    " <small>chance of</small> " + rainAmt + "<small>mm</small>";
+
+  function hourlyAt(key) {
+    const v = hourly[key] ? hourly[key][curIdx] : null;
+    return (v === null || v === undefined) ? null : v;
+  }
+  const curHumidity = hourlyAt("relative_humidity_2m");
+  const curPressure = hourlyAt("surface_pressure");
+  const curVisibility = hourlyAt("visibility");
+  els.statHumidity.textContent = curHumidity !== null ? Math.round(curHumidity) + "%" : "—";
+  els.statPressure.innerHTML = curPressure !== null ? Math.round(curPressure) + " <small>hPa</small>" : "—";
+  // Open-Meteo reports visibility in metres.
+  els.statVisibility.innerHTML = curVisibility !== null
+    ? (curVisibility >= 10000 ? Math.round(curVisibility / 1000) : (curVisibility / 1000).toFixed(1)) + " <small>km</small>"
+    : "—";
 
   renderNotes(daily, idxToday);
 
@@ -1046,6 +1108,22 @@ function renderNowAndForecast(data, usedFallback) {
       '</div>';
   }
   els.dayScroll.innerHTML = html;
+
+  // Next 24 hours of rain, starting from the Now card's hour.
+  function numOrNull(v) { return (v === null || v === undefined) ? null : v; }
+  const rainHours = [];
+  for (let i = curIdx; i < hourly.time.length && rainHours.length < 24; i++) {
+    rainHours.push({
+      time: hourly.time[i],
+      mm: numOrNull(hourly.precipitation ? hourly.precipitation[i] : null),
+      prob: numOrNull(hourly.precipitation_probability[i])
+    });
+  }
+  rainChart.hours = rainHours;
+  rainChart.selected = 0;
+  rainChart.hover = -1;
+  els.rainChartScroll.scrollLeft = 0;
+  renderRainChart();
 
   const sunriseDate = parseLocal(daily.sunrise[idxToday]);
   const sunsetDate = parseLocal(daily.sunset[idxToday]);
@@ -1182,6 +1260,168 @@ function renderSkyArc(sunriseDate, sunsetDate, now, moonRise, moonSet, lat, lon)
   } else {
     els.sunArcLabel.textContent = "";
   }
+}
+
+// Rain by hour: bars for the amount, a line for the chance, sharing one
+// set of hour slots. The SVG is drawn in real pixels at twice the scroller's
+// width, so 12 hours fill the visible frame and text isn't stretched. There
+// are no y-axes (the two measures have different units); instead the
+// readout in the card header gives the exact values for the selected hour,
+// and the legend notes what a full-height bar means.
+const rainChart = { hours: [], selected: 0, hover: -1 };
+
+function rainHourLabel(time, idx) {
+  if (idx === 0) return "Now";
+  const hr = parseInt(time.slice(11, 13), 10);
+  return (hr % 12 || 12) + (hr < 12 ? "am" : "pm");
+}
+
+function renderRainChart() {
+  const hours = rainChart.hours;
+  const frameW = els.rainChartScroll.clientWidth;
+  if (!hours.length || !frameW) return;
+
+  const W = frameW * 2, H = 150;
+  const plotTop = 24, baseY = 118, plotH = baseY - plotTop;
+  const slot = W / 24;
+  const barW = Math.min(18, slot * 0.56);
+  const maxMm = Math.max.apply(null, hours.map(function (h) { return h.mm || 0; }));
+  const mmScale = Math.max(2, maxMm); // at least 2 mm, so a drizzle hour doesn't fill its bar
+  const cx = function (i) { return slot * (i + 0.5); };
+  // Chance is stretched to be readable at a glance: the top of the plot is
+  // 1.5x the day's highest chance, rounded up to the next 5%, capped at 100%
+  // (e.g. a 13% peak gives a 0-20% scale). At least 5%, so a dry day stays flat.
+  const maxProb = Math.max.apply(null, hours.map(function (h) { return h.prob || 0; }));
+  const probScale = Math.min(100, Math.max(5, Math.ceil(maxProb * 1.5 / 5) * 5));
+  const probY = function (p) { return baseY - (Math.min(p, probScale) / probScale) * plotH; };
+  const active = rainChart.hover >= 0 ? rainChart.hover : rainChart.selected;
+
+  let svg =
+    '<defs>' +
+    '<linearGradient id="rainBarGrad" gradientUnits="userSpaceOnUse" x1="0" y1="' + baseY + '" x2="0" y2="' + plotTop + '">' +
+    '<stop offset="0%" style="stop-color:var(--rain-lo)"/><stop offset="100%" style="stop-color:var(--rain-hi)"/></linearGradient>' +
+    // Colour tracks the real 0-100% chance, not the stretched height: the
+    // gradient ends where 100% would sit, which may be far above the plot.
+    '<linearGradient id="rainChanceGrad" gradientUnits="userSpaceOnUse" x1="0" y1="' + baseY + '" x2="0" y2="' + (baseY - (100 / probScale) * plotH).toFixed(1) + '">' +
+    '<stop offset="0%" style="stop-color:var(--chance-lo)"/><stop offset="50%" style="stop-color:var(--chance-mid)"/><stop offset="100%" style="stop-color:var(--chance-hi)"/></linearGradient>' +
+    '</defs>';
+
+  // Selected-hour band, then day boundaries (dashed, like the sun's tails).
+  svg += '<rect x="' + (cx(active) - slot / 2 + 1) + '" y="' + (plotTop - 18) + '" width="' + (slot - 2) + '" height="' + (H - plotTop + 16) + '" rx="8" fill="var(--surface-2)"/>';
+  hours.forEach(function (h, i) {
+    if (i > 0 && h.time.slice(11, 13) === "00") {
+      const x = (slot * i).toFixed(1);
+      svg += '<line x1="' + x + '" y1="' + (plotTop - 12) + '" x2="' + x + '" y2="' + baseY + '" stroke="var(--dim)" stroke-width="1.5" stroke-dasharray="3 4" opacity="0.5"/>' +
+        '<text x="' + (slot * i + 5).toFixed(1) + '" y="' + (plotTop - 3) + '" font-size="10" font-weight="700" letter-spacing="1.2" fill="var(--dim)">' + fmtDow(h.time.slice(0, 10)).toUpperCase() + '</text>';
+    }
+  });
+  svg += '<line x1="0" y1="' + baseY + '" x2="' + W + '" y2="' + baseY + '" stroke="var(--border)" stroke-width="1.5"/>';
+
+  // Bars: rounded tops on the baseline, the shared gradient turning them
+  // from aqua to sky blue as they get taller.
+  hours.forEach(function (h, i) {
+    if (!h.mm || h.mm <= 0) return;
+    const bh = Math.max(3, Math.min(1, h.mm / mmScale) * plotH);
+    const x0 = cx(i) - barW / 2, x1 = x0 + barW, y = baseY - bh, r = Math.min(4, bh / 2, barW / 2);
+    svg += '<path d="M' + x0.toFixed(1) + ',' + baseY + ' V' + (y + r).toFixed(1) + ' Q' + x0.toFixed(1) + ',' + y.toFixed(1) + ' ' + (x0 + r).toFixed(1) + ',' + y.toFixed(1) +
+      ' H' + (x1 - r).toFixed(1) + ' Q' + x1.toFixed(1) + ',' + y.toFixed(1) + ' ' + x1.toFixed(1) + ',' + (y + r).toFixed(1) + ' V' + baseY + ' Z" fill="url(#rainBarGrad)"/>';
+  });
+
+  // Chance line: smooth (horizontal control points, so it never overshoots
+  // 0-100%), broken wherever the model has no value. A surface-coloured
+  // halo keeps it readable where it crosses a bar.
+  let d = "", prev = -1;
+  hours.forEach(function (h, i) {
+    if (h.prob === null) { prev = -1; return; }
+    const x = cx(i), y = probY(h.prob);
+    if (prev < 0) d += " M" + x.toFixed(1) + "," + y.toFixed(1);
+    else {
+      const xm = ((cx(prev) + x) / 2).toFixed(1);
+      d += " C" + xm + "," + probY(hours[prev].prob).toFixed(1) + " " + xm + "," + y.toFixed(1) + " " + x.toFixed(1) + "," + y.toFixed(1);
+    }
+    prev = i;
+  });
+  if (d) {
+    svg += '<path d="' + d + '" stroke="var(--surface)" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '<path d="' + d + '" stroke="url(#rainChanceGrad)" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>';
+  }
+
+  // Direct labels for the peaks only; the readout covers every other hour.
+  let peakProbIdx = -1, peakMmIdx = -1;
+  hours.forEach(function (h, i) {
+    if (h.prob !== null && h.prob > 0 && (peakProbIdx < 0 || h.prob > hours[peakProbIdx].prob)) peakProbIdx = i;
+    if (h.mm && h.mm > 0 && (peakMmIdx < 0 || h.mm > hours[peakMmIdx].mm)) peakMmIdx = i;
+  });
+  const label = function (x, y, text) {
+    return '<text x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" text-anchor="middle" font-size="10.5" font-weight="700" fill="var(--text)" stroke="var(--surface)" stroke-width="3" paint-order="stroke">' + text + '</text>';
+  };
+  let probLabelY = null;
+  if (peakProbIdx >= 0) {
+    probLabelY = probY(hours[peakProbIdx].prob) - 9;
+    svg += label(cx(peakProbIdx), probLabelY, Math.round(hours[peakProbIdx].prob) + "%");
+  }
+  if (peakMmIdx >= 0) {
+    const mmY = baseY - Math.max(3, Math.min(1, hours[peakMmIdx].mm / mmScale) * plotH) - 6;
+    if (!(peakMmIdx === peakProbIdx && Math.abs(mmY - probLabelY) < 14)) svg += label(cx(peakMmIdx), mmY, hours[peakMmIdx].mm.toFixed(1) + "mm");
+  }
+
+  // Marker on the line for the selected hour, styled like the sun marker.
+  const act = hours[active];
+  if (act && act.prob !== null) {
+    const y = probY(act.prob);
+    svg += '<circle cx="' + cx(active) + '" cy="' + y + '" r="7.5" fill="var(--surface)" stroke="var(--border)" stroke-width="1.5"/>' +
+      '<circle cx="' + cx(active) + '" cy="' + y + '" r="4.5" fill="url(#rainChanceGrad)"/>';
+  }
+
+  // Hour labels every 3 hours (plus Now), then full-height hit targets.
+  hours.forEach(function (h, i) {
+    const hr = parseInt(h.time.slice(11, 13), 10);
+    if (i === 0 || (hr % 3 === 0 && i > 1)) {
+      svg += '<text x="' + cx(i).toFixed(1) + '" y="' + (baseY + 17) + '" text-anchor="middle" font-size="11" font-weight="' + (i === active ? 700 : 500) + '" fill="' + (i === active ? "var(--text)" : "var(--dim)") + '">' + rainHourLabel(h.time, i) + '</text>';
+    }
+  });
+  hours.forEach(function (h, i) {
+    svg += '<rect data-i="' + i + '" x="' + (slot * i).toFixed(1) + '" y="0" width="' + slot.toFixed(1) + '" height="' + H + '" fill="transparent"/>';
+  });
+
+  els.rainChartSvg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  els.rainChartSvg.innerHTML = svg;
+
+  const readoutTime = active === 0 ? "Now"
+    : (act.time.slice(0, 10) !== hours[0].time.slice(0, 10) ? fmtDow(act.time.slice(0, 10)) + " " : "") + rainHourLabel(act.time, active);
+  els.rainChartReadout.textContent = readoutTime + " · " +
+    (act.prob !== null ? Math.round(act.prob) + "% chance" : "chance n/a") + " · " +
+    (act.mm !== null ? act.mm.toFixed(1) + " mm" : "amount n/a");
+  els.rainChartScale.textContent = "Full height = " + probScale + "% / " + (Math.round(mmScale * 10) / 10) + " mm";
+}
+
+function rainChartIndexAt(e) {
+  const t = e.target.closest && e.target.closest("[data-i]");
+  return t ? parseInt(t.getAttribute("data-i"), 10) : -1;
+}
+els.rainChartSvg.addEventListener("click", function (e) {
+  const i = rainChartIndexAt(e);
+  if (i < 0) return;
+  rainChart.selected = i; rainChart.hover = -1;
+  renderRainChart();
+});
+els.rainChartSvg.addEventListener("pointermove", function (e) {
+  if (e.pointerType !== "mouse") return;
+  const i = rainChartIndexAt(e);
+  if (i >= 0 && i !== rainChart.hover) { rainChart.hover = i; renderRainChart(); }
+});
+els.rainChartSvg.addEventListener("pointerleave", function () {
+  if (rainChart.hover < 0) return;
+  rainChart.hover = -1; renderRainChart();
+});
+if (window.ResizeObserver) {
+  let lastRainChartW = 0;
+  new ResizeObserver(function () {
+    const w = els.rainChartScroll.clientWidth;
+    if (w && w !== lastRainChartW) { lastRainChartW = w; renderRainChart(); }
+  }).observe(els.rainChartScroll);
+} else {
+  window.addEventListener("resize", renderRainChart);
 }
 
 function renderRainfallStats(archive) {
